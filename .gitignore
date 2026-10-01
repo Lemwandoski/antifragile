@@ -1,0 +1,5 @@
+# Task backups exported from the app (personal data, keep out of the repo)
+antifragile-tasks-*.json
+*.backup.json
+
+.DS_Store
