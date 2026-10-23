@@ -1,6 +1,6 @@
 # Antifragile Launch Tracker
 
-A small task tracker for launching Antifragile Tech Limited. You can set each task's status (New, Ongoing, Done), deadline, priority and category, and keep a comment log on it. There is a list view grouped by deadline, a drag-and-drop board view, search, and filters.
+A small task tracker for launching Antifragile Tech Limited. You can set each task's status (New, Ongoing, Done, Cancelled), deadline, priority and category, and keep a comment log on it. There is a list view grouped by deadline, a drag-and-drop board view, search, and filters.
 
 It's a static site: plain HTML, CSS and JavaScript, with no build step and no server.
 

@@ -1,7 +1,9 @@
 (function(){
   "use strict";
   const STORE_KEY="aft-tasks-v1", UI_KEY="aft-ui", BACKUP_KEY="aft-last-export";
-  const STATUSES=[{id:"new",label:"New"},{id:"ongoing",label:"Ongoing"},{id:"done",label:"Done"}];
+  const STATUSES=[{id:"new",label:"New"},{id:"ongoing",label:"Ongoing"},{id:"done",label:"Done"},{id:"cancelled",label:"Cancelled"}];
+  const CLOSED=["done","cancelled"], isClosed=t=>CLOSED.includes(t.status);
+  const CYCLE=["new","ongoing","done"];
   const PRIOS={high:0,medium:1,low:2};
   const CATEGORIES=["Legal & compliance","Finance & banking","Brand & marketing","Operations & IT","Odoo partnership","Sales & clients","Product","Personal & skills"];
   const state={tasks:[],view:"list",status:"all",cat:"all",q:"",sort:"deadline",openId:null,confirmDel:false,canSave:true,importing:null};
@@ -30,11 +32,11 @@
   function normalise(t){
     return {id:String(t.id),seq:Number(t.seq)||0,title:String(t.title||""),notes:String(t.notes||""),
       category:CATEGORIES.includes(t.category)?t.category:CATEGORIES[0],
-      status:["new","ongoing","done"].includes(t.status)?t.status:"new",
+      status:STATUSES.some(s=>s.id===t.status)?t.status:"new",
       priority:["high","medium","low"].includes(t.priority)?t.priority:"medium",
       deadline:/^\d{4}-\d{2}-\d{2}$/.test(t.deadline||"")?t.deadline:"",
       comments:Array.isArray(t.comments)?t.comments.filter(c=>c&&typeof c.text==="string").map(c=>({text:c.text,at:String(c.at||new Date().toISOString())})):[],
-      createdAt:t.createdAt||new Date().toISOString(),doneAt:t.doneAt||null};
+      createdAt:t.createdAt||new Date().toISOString(),doneAt:t.doneAt||null,cancelledAt:t.cancelledAt||null};
   }
 
   // ---------- dates ----------
@@ -43,7 +45,7 @@
   function fmtDate(s){if(!s)return"";const d=new Date(s+"T00:00:00");return d.toLocaleDateString(undefined,{day:"numeric",month:"short"})}
   function dueInfo(t){
     if(!t.deadline)return{cls:"none",txt:"No deadline",late:false};
-    if(t.status==="done")return{cls:"none",txt:fmtDate(t.deadline),late:false};
+    if(isClosed(t))return{cls:"none",txt:fmtDate(t.deadline),late:false};
     const n=dayDiff(t.deadline,todayStr());
     if(n<0)return{cls:"late",txt:fmtDate(t.deadline)+" · "+(-n)+"d late",late:true};
     if(n===0)return{cls:"soon",txt:"Today",late:false};
@@ -76,7 +78,7 @@
   function filtered(){
     let ts=state.tasks.slice();
     if(state.cat!=="all")ts=ts.filter(t=>t.category===state.cat);
-    if(state.status==="open")ts=ts.filter(t=>t.status!=="done");
+    if(state.status==="open")ts=ts.filter(t=>!isClosed(t));
     else if(state.status==="late")ts=ts.filter(t=>dueInfo(t).late);
     else if(state.status!=="all")ts=ts.filter(t=>t.status===state.status);
     if(state.q)ts=ts.filter(t=>[t.title,t.notes,t.category,refOf(t),...(t.comments||[]).map(c=>c.text)].join(" ").toLowerCase().includes(state.q));
@@ -90,24 +92,25 @@
   function renderSummary(){
     const all=state.tasks, n=s=>all.filter(t=>t.status===s).length;
     const late=all.filter(t=>dueInfo(t).late).length;
-    const week=all.filter(t=>t.status!=="done"&&t.deadline&&dayDiff(t.deadline,todayStr())>=0&&dayDiff(t.deadline,todayStr())<=7).length;
-    const total=all.length||1, d=n("done"), o=n("ongoing"), w=n("new");
+    const week=all.filter(t=>!isClosed(t)&&t.deadline&&dayDiff(t.deadline,todayStr())>=0&&dayDiff(t.deadline,todayStr())<=7).length;
+    const c=n("cancelled"), active=all.length-c, total=active||1, d=n("done"), o=n("ongoing"), w=n("new");
     $("#summary").innerHTML=`
       <div class="stat"><span class="k"><span class="dot" style="color:var(--new)"></span>New</span><span class="v">${w}</span></div>
       <div class="stat"><span class="k"><span class="dot" style="color:var(--ongoing)"></span>Ongoing</span><span class="v">${o}</span></div>
       <div class="stat"><span class="k"><span class="dot" style="color:var(--done)"></span>Done</span><span class="v">${d}</span></div>
+      <div class="stat"><span class="k"><span class="dot" style="color:var(--cancelled)"></span>Cancelled</span><span class="v">${c}</span></div>
       <div class="stat late"><span class="k">Overdue</span><span class="v">${late}</span></div>
       <div class="stat"><span class="k">Due in 7 days</span><span class="v">${week}</span></div>
-      <div class="progress"><div class="bar" role="img" aria-label="${d} of ${all.length} done"><i style="width:${d/total*100}%;background:var(--done)"></i><i style="width:${o/total*100}%;background:var(--ongoing)"></i></div><span>${Math.round(d/total*100)}% done · ${d}/${all.length}</span></div>`;
+      <div class="progress"><div class="bar" role="img" aria-label="${d} of ${active} active tasks done"><i style="width:${d/total*100}%;background:var(--done)"></i><i style="width:${o/total*100}%;background:var(--ongoing)"></i></div><span>${Math.round(d/total*100)}% done · ${d}/${active}${c?" · "+c+" cancelled not counted":""}</span></div>`;
   }
 
   const ccIcon='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>';
   const statusLabel=s=>STATUSES.find(x=>x.id===s)?.label||"New";
-  const pill=t=>`<button type="button" class="pill ${t.status}" data-cycle="${t.id}" title="Click to change status"><span class="dot"></span>${statusLabel(t.status)}</button>`;
+  const pill=t=>`<button type="button" class="pill ${t.status}" data-cycle="${t.id}" title="${t.status==="cancelled"?"Click to reopen":"Click to change status"}"><span class="dot"></span>${statusLabel(t.status)}</button>`;
 
   function rowHtml(t){
     const d=dueInfo(t), cc=(t.comments||[]).length;
-    return `<div class="row ${t.status==="done"?"isdone":""} ${d.late?"late":""}" data-open="${t.id}" tabindex="0">
+    return `<div class="row ${isClosed(t)?"isdone":""} ${t.status==="cancelled"?"iscancelled":""} ${d.late?"late":""}" data-open="${t.id}" tabindex="0">
       <div class="c-status">${pill(t)}</div>
       <div class="tcell"><span class="title">${esc(t.title||"Untitled task")}</span><span class="ref">${refOf(t)}</span>
         <span class="mobile-meta"><span class="due ${d.cls}">${d.txt}</span><span class="prio ${t.priority}">${t.priority}</span><span class="cat">${esc(t.category||"")}</span>${cc?`<span class="cc">${ccIcon}${cc}</span>`:""}</span></div>
@@ -119,7 +122,7 @@
   }
   function cardHtml(t){
     const d=dueInfo(t), cc=(t.comments||[]).length;
-    return `<div class="card ${d.late?"late":""}" data-open="${t.id}" draggable="true" tabindex="0">
+    return `<div class="card ${d.late?"late":""} ${t.status==="cancelled"?"iscancelled":""}" data-open="${t.id}" draggable="true" tabindex="0">
       <span class="ref">${refOf(t)} · ${esc(t.category||"")}</span>
       <span class="title">${esc(t.title||"Untitled task")}</span>
       <span class="meta"><span class="due ${d.cls}">${d.txt}</span><span class="prio ${t.priority}">${t.priority}</span>${cc?`<span class="cc">${ccIcon}${cc}</span>`:""}</span>
@@ -158,9 +161,9 @@
       if(!ts.length){main.innerHTML=`<div class="empty"><strong>Nothing matches these filters</strong><span>Try "All" or clear the search.</span></div>`;}
       else{
         let body="";
-        if(state.sort==="deadline"&&state.status!=="done"){
-          const open=ts.filter(t=>t.status!=="done"), done=ts.filter(t=>t.status==="done");
-          const g=[["Overdue",open.filter(t=>dueInfo(t).late)],["This week",open.filter(t=>!dueInfo(t).late&&t.deadline&&dayDiff(t.deadline,todayStr())<=7)],["Later",open.filter(t=>t.deadline&&dayDiff(t.deadline,todayStr())>7)],["No deadline",open.filter(t=>!t.deadline)],["Done",done]];
+        if(state.sort==="deadline"&&!CLOSED.includes(state.status)){
+          const open=ts.filter(t=>!isClosed(t)), done=ts.filter(t=>t.status==="done"), cancelled=ts.filter(t=>t.status==="cancelled");
+          const g=[["Overdue",open.filter(t=>dueInfo(t).late)],["This week",open.filter(t=>!dueInfo(t).late&&t.deadline&&dayDiff(t.deadline,todayStr())<=7)],["Later",open.filter(t=>t.deadline&&dayDiff(t.deadline,todayStr())>7)],["No deadline",open.filter(t=>!t.deadline)],["Done",done],["Cancelled",cancelled]];
           g.forEach(([name,items])=>{if(items.length)body+=`<div class="group">${name}<span class="ref">${items.length}</span></div>`+items.map(rowHtml).join("")});
         } else body=ts.map(rowHtml).join("");
         main.innerHTML=`<div class="list"><div class="lhead"><span>Status</span><span>Task</span><span>Category</span><span>Priority</span><span>Deadline</span><span></span></div>${body}</div>`;
@@ -175,7 +178,7 @@
   // ---------- list / board interactions ----------
   $("#main").addEventListener("click",e=>{
     const c=e.target.closest("[data-cycle]");
-    if(c){e.stopPropagation();const t=byId(c.dataset.cycle);const i=STATUSES.findIndex(s=>s.id===t.status);setStatus(t,STATUSES[(i+1)%3].id);return;}
+    if(c){e.stopPropagation();const t=byId(c.dataset.cycle);const i=CYCLE.indexOf(t.status);setStatus(t,i<0?"new":CYCLE[(i+1)%CYCLE.length]);return;}
     const o=e.target.closest("[data-open]");if(o)openTask(o.dataset.open);
   });
   $("#main").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.matches("[data-open]"))openTask(e.target.dataset.open)});
@@ -190,11 +193,11 @@
 
   // ---------- task changes ----------
   function update(id,data,quiet){const t=byId(id);if(!t)return;Object.assign(t,data);persist();if(!quiet)render()}
-  function setStatus(t,s){update(t.id,{status:s,doneAt:s==="done"?new Date().toISOString():null});toast(refOf(t)+" moved to "+statusLabel(s))}
+  function setStatus(t,s){const now=new Date().toISOString();update(t.id,{status:s,doneAt:s==="done"?now:null,cancelledAt:s==="cancelled"?now:null});toast(refOf(t)+" moved to "+statusLabel(s))}
   function createTask(){
     const id="t"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
     const seq=Math.max(0,...state.tasks.map(t=>t.seq||0))+1;
-    state.tasks.push({id,seq,title:"",notes:"",category:state.cat!=="all"?state.cat:CATEGORIES[0],status:"new",priority:"medium",deadline:"",comments:[],createdAt:new Date().toISOString(),doneAt:null});
+    state.tasks.push({id,seq,title:"",notes:"",category:state.cat!=="all"?state.cat:CATEGORIES[0],status:"new",priority:"medium",deadline:"",comments:[],createdAt:new Date().toISOString(),doneAt:null,cancelledAt:null});
     persist();
     state.openId=id;state.confirmDel=false;render();
     setTimeout(()=>{const el=$("#f-title");if(el)el.focus()},30);
@@ -253,7 +256,7 @@
     const f=$("#dfoot");if(!f)return;
     f.innerHTML=state.confirmDel
       ?`<div class="confirm">Delete ${refOf(t)} and its comments?<button class="btn danger" id="yesDel" type="button">Delete</button><button class="btn" id="noDel" type="button">Keep</button></div>`
-      :`<button class="btn danger" id="del" type="button">Delete task</button><span class="note">${t.status==="done"&&t.doneAt?"Completed "+new Date(t.doneAt).toLocaleDateString(undefined,{day:"numeric",month:"short"}):"Changes save automatically"}</span>`;
+      :`<button class="btn danger" id="del" type="button">Delete task</button><span class="note">${t.status==="done"&&t.doneAt?"Completed "+new Date(t.doneAt).toLocaleDateString(undefined,{day:"numeric",month:"short"}):t.status==="cancelled"&&t.cancelledAt?"Cancelled "+new Date(t.cancelledAt).toLocaleDateString(undefined,{day:"numeric",month:"short"}):"Changes save automatically"}</span>`;
     if(state.confirmDel){$("#yesDel").onclick=deleteTask;$("#noDel").onclick=()=>{state.confirmDel=false;refreshFoot(t)}}
     else $("#del").onclick=()=>{state.confirmDel=true;refreshFoot(t)};
   }
